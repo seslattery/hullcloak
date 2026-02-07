@@ -87,7 +87,7 @@ func Generate(p *Params) (string, error) {
 		allReadPaths := append([]string{p.CWD}, p.AllowRead...)
 		allReadPaths = append(allReadPaths, p.AllowWrite...)
 		emitSubpath(&b, "allow", "file-read*", allReadPaths)
-		emitLiteral(&b, "allow", "file-read*", ancestors(allReadPaths))
+		emitLiteral(&b, "file-read*", ancestors(allReadPaths))
 	} else {
 		w(";; Permissive: allow reads\n")
 		w("(allow file-read*)\n")
@@ -95,13 +95,8 @@ func Generate(p *Params) (string, error) {
 
 	// Read denies after allows (socket exceptions may follow in permissive)
 	w("\n;; Read denies (after allows for last-match-wins)\n")
-	if p.Tier == config.TierStrict {
-		emitDotfileDeny(&b, "file-read*", homeRe, dotfileExceptions)
-	}
+	emitDotfileDeny(&b, "file-read*", homeRe, dotfileExceptions)
 	emitSubpath(&b, "deny", "file-read*", varRunPaths)
-	// Allow resolv.conf AFTER blocking /var/run (last-match-wins for DNS resolution)
-	w("(allow file-read* (literal \"/var/run/resolv.conf\"))\n")
-	w("(allow file-read* (literal \"/private/var/run/resolv.conf\"))\n")
 	w("\n")
 
 	// Writes
@@ -115,18 +110,16 @@ func Generate(p *Params) (string, error) {
 
 	// Write denies after allows
 	w("\n;; Write denies\n")
-	if p.Tier == config.TierStrict {
-		emitDotfileDeny(&b, "file-write*", homeRe, dotfileExceptions)
-	}
+	emitDotfileDeny(&b, "file-write*", homeRe, dotfileExceptions)
 	emitSubpath(&b, "deny", "file-write*", varRunPaths)
 	w("\n")
 
 	// Devices
 	w(";; Devices\n")
-	emitLiteral(&b, "allow", "file-write*", devWrite)
-	emitLiteral(&b, "allow", "file-ioctl", devAll)
+	emitLiteral(&b, "file-write*", devWrite)
+	emitLiteral(&b, "file-ioctl", devAll)
 	if p.Tier == config.TierStrict {
-		emitLiteral(&b, "allow", "file-read*", devAll)
+		emitLiteral(&b, "file-read*", devAll)
 	}
 	w("\n")
 
@@ -137,13 +130,6 @@ func Generate(p *Params) (string, error) {
 	w("(allow network-bind (local ip \"localhost:*\"))\n")
 	wf("(allow network-outbound (remote tcp \"localhost:%d\"))\n", p.ProxyPort)
 	w("(allow network-inbound (local tcp \"localhost:*\"))\n")
-	// DNS queries (UDP) - need full UDP access for DNS to work
-	w("(allow network-bind (local udp \"*:*\"))\n")
-	w("(allow network-outbound (remote udp \"*:53\"))\n")
-	w("(allow network-inbound (local udp \"*:*\"))\n")
-	// mDNSResponder unix socket (used by getaddrinfo on macOS)
-	w("(allow network-outbound (remote unix-socket (path-literal \"/var/run/mDNSResponder\")))\n")
-	w("(allow file-read* (literal \"/var/run/mDNSResponder\"))\n")
 
 	// Unix socket exceptions (permissive only, after /var/run denies)
 	if len(p.AllowUnixSockets) > 0 && p.Tier == config.TierPermissive {
@@ -230,6 +216,7 @@ func emitDotfileDeny(b *strings.Builder, op, homeRe string, exceptions []string)
 	fmt.Fprintf(b, "(deny %s\n  (require-all\n    (regex #\"^%s/\\..*\")\n", op, homeRe)
 	for _, exc := range exceptions {
 		fmt.Fprintf(b, "    (require-not (literal \"%s\"))\n", sbplQuote(exc))
+		fmt.Fprintf(b, "    (require-not (subpath \"%s\"))\n", sbplQuote(exc))
 	}
 	fmt.Fprintf(b, "  ))\n")
 }
@@ -240,9 +227,9 @@ func emitSubpath(b *strings.Builder, action, op string, paths []string) {
 	}
 }
 
-func emitLiteral(b *strings.Builder, action, op string, paths []string) {
+func emitLiteral(b *strings.Builder, op string, paths []string) {
 	for _, p := range paths {
-		fmt.Fprintf(b, "(%s %s (literal \"%s\"))\n", action, op, sbplQuote(p))
+		fmt.Fprintf(b, "(allow %s (literal \"%s\"))\n", op, sbplQuote(p))
 	}
 }
 
@@ -321,8 +308,8 @@ func machServicesForTier(tier config.Tier) []string {
 		"com.apple.SystemConfiguration.DNSConfiguration",
 		"com.apple.SystemConfiguration.configd",
 		"com.apple.analyticsd",
-		"com.apple.FSEvents",              // File system watching (used by Node.js/libuv)
-		"com.apple.dnssd.service",         // DNS Service Discovery (Bonjour/mDNS)
+		"com.apple.FSEvents",                           // File system watching (used by Node.js/libuv)
+		"com.apple.dnssd.service",                      // DNS Service Discovery (Bonjour/mDNS)
 		"com.apple.system.DirectoryService.libinfo_v1", // Directory services for DNS
 	}
 	if tier == config.TierPermissive {

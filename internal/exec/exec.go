@@ -172,12 +172,21 @@ func writeProfile(tmpDir, profile string) (string, error) {
 	}
 	path := f.Name()
 	if _, err := f.WriteString(profile); err != nil {
-		f.Close()       //nolint:errcheck,gosec
-		os.Remove(path) //nolint:errcheck
+		if closeErr := f.Close(); closeErr != nil {
+			// Best-effort close before returning the original write error.
+			_ = closeErr
+		}
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			// Best-effort cleanup.
+			_ = removeErr
+		}
 		return "", fmt.Errorf("write profile: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(path) //nolint:errcheck
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			// Best-effort cleanup.
+			_ = removeErr
+		}
 		return "", fmt.Errorf("close profile: %w", err)
 	}
 	return path, nil
@@ -188,7 +197,12 @@ func runSandboxPTY(ctx context.Context, opts *Options, childEnv []string, cwd, t
 	if err != nil {
 		return Result{}, err
 	}
-	defer os.Remove(profilePath) //nolint:errcheck
+	defer func() {
+		if removeErr := os.Remove(profilePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			// Best-effort cleanup.
+			_ = removeErr
+		}
+	}()
 
 	args := append([]string{"-f", profilePath, "--"}, opts.Command...)
 	cmd := exec.CommandContext(ctx, sandboxExecPath, args...) //nolint:gosec
@@ -202,18 +216,42 @@ func runSandboxPTY(ctx context.Context, opts *Options, childEnv []string, cwd, t
 
 	done := make(chan struct{})
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGWINCH)
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGWINCH, os.Interrupt, syscall.SIGTERM)
 	go func() {
+		termCount := 0
 		for {
 			select {
 			case <-done:
 				return
-			case _, ok := <-sigCh:
+			case sig, ok := <-sigCh:
 				if !ok {
 					return
 				}
-				pty.InheritSize(os.Stdin, ptmx) //nolint:errcheck
+				if sig == syscall.SIGWINCH {
+					if resizeErr := pty.InheritSize(os.Stdin, ptmx); resizeErr != nil {
+						// Resize can race with PTY teardown; ignore transient failures.
+						_ = resizeErr
+					}
+					continue
+				}
+				termCount++
+				s, ok := sig.(syscall.Signal)
+				if !ok {
+					continue
+				}
+				if termCount >= 2 {
+					s = syscall.SIGKILL
+				}
+				if cmd.Process != nil {
+					if signalErr := cmd.Process.Signal(s); signalErr != nil {
+						// Process may already be exiting.
+						_ = signalErr
+					}
+				}
+				if s == syscall.SIGKILL {
+					return
+				}
 			}
 		}
 	}()
@@ -225,21 +263,33 @@ func runSandboxPTY(ctx context.Context, opts *Options, childEnv []string, cwd, t
 	}
 
 	go func() {
-		io.Copy(ptmx, os.Stdin) //nolint:errcheck
+		if _, copyErr := io.Copy(ptmx, os.Stdin); copyErr != nil && !errors.Is(copyErr, io.EOF) {
+			// PTY close can interrupt stdin copy.
+			_ = copyErr
+		}
 	}()
 
 	go func() {
-		io.Copy(opts.Stdout, ptmx) //nolint:errcheck
+		if _, copyErr := io.Copy(opts.Stdout, ptmx); copyErr != nil && !errors.Is(copyErr, io.EOF) {
+			// PTY close can interrupt stdout copy.
+			_ = copyErr
+		}
 	}()
 
 	waitErr := cmd.Wait()
 
 	close(done)
 	signal.Stop(sigCh)
-	ptmx.Close() //nolint:errcheck
+	if closeErr := ptmx.Close(); closeErr != nil {
+		// PTY may already be closed.
+		_ = closeErr
+	}
 
 	if oldState != nil {
-		term.Restore(int(os.Stdin.Fd()), oldState) //nolint:errcheck,gosec
+		if restoreErr := term.Restore(int(os.Stdin.Fd()), oldState); restoreErr != nil { //nolint:gosec
+			// Terminal may already be reset.
+			_ = restoreErr
+		}
 	}
 
 	if waitErr != nil {
@@ -256,7 +306,12 @@ func runSandboxPipes(ctx context.Context, opts *Options, childEnv []string, cwd,
 	if err != nil {
 		return Result{}, err
 	}
-	defer os.Remove(profilePath) //nolint:errcheck
+	defer func() {
+		if removeErr := os.Remove(profilePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			// Best-effort cleanup.
+			_ = removeErr
+		}
+	}()
 
 	args := append([]string{"-f", profilePath, "--"}, opts.Command...)
 	cmd := exec.CommandContext(ctx, sandboxExecPath, args...) //nolint:gosec
@@ -291,7 +346,10 @@ func runSandboxPipes(ctx context.Context, opts *Options, childEnv []string, cwd,
 				if count >= 2 {
 					s = syscall.SIGKILL
 				}
-				syscall.Kill(-cmd.Process.Pid, s) //nolint:errcheck,gosec
+				if killErr := syscall.Kill(-cmd.Process.Pid, s); killErr != nil && !errors.Is(killErr, syscall.ESRCH) { //nolint:gosec
+					// Process group may already be gone.
+					_ = killErr
+				}
 				if s == syscall.SIGKILL {
 					return
 				}
@@ -339,7 +397,7 @@ func ensurePrivateDir(path string) error {
 		return fmt.Errorf("%s is owned by uid %d, not current user %d", path, stat.Uid, os.Getuid())
 	}
 	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
-		if err := os.Chmod(path, 0o700); err != nil {
+		if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // directory permission tightening
 			return fmt.Errorf("%s has perm %o and chmod failed: %w", path, perm, err)
 		}
 	}

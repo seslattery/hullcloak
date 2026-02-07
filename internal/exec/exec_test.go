@@ -265,7 +265,7 @@ func TestRunFixesPermissions(t *testing.T) {
 	chdir(t, dir)
 
 	base := filepath.Join(dir, ".hullcloak-tmp")
-	os.MkdirAll(filepath.Join(base, "tmp"), 0o755)  //nolint:errcheck
+	os.MkdirAll(filepath.Join(base, "tmp"), 0o755)   //nolint:errcheck
 	os.MkdirAll(filepath.Join(base, "cache"), 0o755) //nolint:errcheck
 
 	_, err := Run(context.Background(), &Options{

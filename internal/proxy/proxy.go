@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -217,16 +218,43 @@ func (s *Server) resolvePublicIPs(ctx context.Context, host string) ([]net.IP, e
 }
 
 func isPublicIP(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
 		return false
 	}
-	if ip.To4() != nil {
-		return true
+	addr = addr.Unmap()
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() ||
+		addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() ||
+		addr.IsInterfaceLocalMulticast() {
+		return false
 	}
-	if ip16 := ip.To16(); ip16 != nil {
-		return (ip16[0] & 0xfe) != 0xfc
+
+	for _, prefix := range blockedSpecialPrefixes {
+		if prefix.Contains(addr) {
+			return false
+		}
 	}
-	return false
+	return true
+}
+
+var blockedSpecialPrefixes = []netip.Prefix{
+	// IPv4 special-use networks that are not globally reachable.
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"), // CGNAT
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),    // TEST-NET-1
+	netip.MustParsePrefix("192.88.99.0/24"),  // 6to4 relay anycast
+	netip.MustParsePrefix("198.18.0.0/15"),   // benchmark testing
+	netip.MustParsePrefix("198.51.100.0/24"), // TEST-NET-2
+	netip.MustParsePrefix("203.0.113.0/24"),  // TEST-NET-3
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved/future use
+
+	// IPv6 special-use/doc/testing ranges.
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001:2::/48"),   // benchmarking
+	netip.MustParsePrefix("2001:db8::/32"), // documentation
+	netip.MustParsePrefix("2001:10::/28"),  // ORCHID
 }
 
 func parseHostPort(hostport string) (host string, port int, err error) {

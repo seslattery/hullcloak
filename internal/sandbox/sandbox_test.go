@@ -100,6 +100,8 @@ func TestStrictTierProfile(t *testing.T) {
 		`(subpath "/private/var")`,
 		"com.apple.accountsd",
 		"com.apple.sysmond",
+		`(allow network-outbound (remote udp "*:53"))`,
+		"/var/run/mDNSResponder",
 	}
 
 	for _, want := range mustContain {
@@ -127,11 +129,13 @@ func TestPermissiveTierProfile(t *testing.T) {
 
 	mustContain := []string{
 		"(allow file-read*)\n",
+		`(deny file-read* (regex #"^/Users/testuser/\..*"))`,
 		`(deny file-read* (subpath "/var/run"))`,
 		"(deny file-write*)",
 		`(allow file-write* (subpath "/Users/testuser/project"))`,
 		`(allow file-write* (subpath "/private/tmp"))`,
 		`(allow file-write* (subpath "/opt/output"))`,
+		`(deny file-write* (regex #"^/Users/testuser/\..*"))`,
 		`(allow network-outbound (remote unix-socket (path-literal "/var/run/docker.sock")))`,
 		`(allow file-read* (literal "/var/run/docker.sock"))`,
 		`(allow file-write* (literal "/var/run/docker.sock"))`,
@@ -143,8 +147,8 @@ func TestPermissiveTierProfile(t *testing.T) {
 	}
 
 	mustNotContain := []string{
-		`(deny file-read* (regex #"^/Users/testuser/\..*"))`,
-		`(deny file-write* (regex #"^/Users/testuser/\..*"))`,
+		`(allow network-outbound (remote udp "*:53"))`,
+		"/var/run/mDNSResponder",
 	}
 
 	for _, want := range mustContain {
@@ -191,16 +195,18 @@ func TestRuleOrdering(t *testing.T) {
 		}
 	})
 
-	t.Run("permissive: no dotfile denies", func(t *testing.T) {
+	t.Run("permissive: dotfile denies after allow-all reads", func(t *testing.T) {
 		p := baseParams()
 		p.Tier = config.TierPermissive
 		profile, _ := Generate(p)
 
-		if strings.Contains(profile, `(deny file-read* (regex #"^/Users/testuser/\..*"))`) {
-			t.Error("permissive should not deny dotfile reads")
+		allowAll := strings.Index(profile, "(allow file-read*)\n")
+		denyDotfiles := strings.Index(profile, `(deny file-read* (regex #"^/Users/testuser/\..*"))`)
+		if allowAll < 0 || denyDotfiles < 0 {
+			t.Fatal("missing expected permissive dotfile rules")
 		}
-		if strings.Contains(profile, `(deny file-write* (regex #"^/Users/testuser/\..*"))`) {
-			t.Error("permissive should not deny dotfile writes")
+		if denyDotfiles <= allowAll {
+			t.Error("permissive dotfile deny must come after allow-all reads")
 		}
 	})
 
@@ -410,6 +416,7 @@ func TestDotfileExceptions(t *testing.T) {
 		mustContain := []string{
 			"require-all",
 			`(require-not (literal "/Users/testuser/.claude.json"))`,
+			`(require-not (subpath "/Users/testuser/.claude.json"))`,
 			`(regex #"^/Users/testuser/\..*")`,
 		}
 		for _, want := range mustContain {
@@ -435,6 +442,19 @@ func TestDotfileExceptions(t *testing.T) {
 
 		if !strings.Contains(profile, `(require-not (literal "/Users/testuser/.config"))`) {
 			t.Error("dotfile in allow_write should create exception")
+		}
+		if !strings.Contains(profile, `(require-not (subpath "/Users/testuser/.config"))`) {
+			t.Error("dotfile in allow_write should create subpath exception")
+		}
+	})
+
+	t.Run("dotfile directory exception uses subpath for descendants", func(t *testing.T) {
+		p := baseParams()
+		p.AllowRead = []string{"/Users/testuser/.claude"}
+		profile, _ := Generate(p)
+
+		if !strings.Contains(profile, `(require-not (subpath "/Users/testuser/.claude"))`) {
+			t.Error("dotfile directory exception should use subpath to cover descendants")
 		}
 	})
 
