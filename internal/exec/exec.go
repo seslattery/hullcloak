@@ -120,7 +120,7 @@ func Run(ctx context.Context, opts *Options) (Result, error) {
 		return Result{}, fmt.Errorf("generate profile: %w", err)
 	}
 
-	return runSandbox(ctx, opts, childEnv, cwd, profile)
+	return runSandbox(ctx, opts, childEnv, cwd, tmpDir, profile)
 }
 
 // ProfileOnly generates a sandbox profile without executing a command.
@@ -148,8 +148,10 @@ func ProfileOnly(cfg *config.Config) (string, error) {
 	})
 }
 
-func runSandbox(ctx context.Context, opts *Options, childEnv []string, cwd, profile string) (Result, error) {
-	f, err := os.CreateTemp("", "hullcloak-*.sbpl")
+const sandboxExecPath = "/usr/bin/sandbox-exec"
+
+func runSandbox(ctx context.Context, opts *Options, childEnv []string, cwd, tmpDir, profile string) (Result, error) {
+	f, err := os.CreateTemp(tmpDir, "hullcloak-*.sbpl")
 	if err != nil {
 		return Result{}, fmt.Errorf("create profile file: %w", err)
 	}
@@ -165,12 +167,13 @@ func runSandbox(ctx context.Context, opts *Options, childEnv []string, cwd, prof
 	}
 
 	args := append([]string{"-f", profilePath, "--"}, opts.Command...)
-	cmd := exec.CommandContext(ctx, "sandbox-exec", args...) //nolint:gosec
+	cmd := exec.CommandContext(ctx, sandboxExecPath, args...) //nolint:gosec
 	cmd.Env = childEnv
 	cmd.Dir = cwd
 	cmd.Stdin = opts.Stdin
 	cmd.Stdout = opts.Stdout
 	cmd.Stderr = opts.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -190,10 +193,12 @@ func runSandbox(ctx context.Context, opts *Options, childEnv []string, cwd, prof
 			case sig := <-sigCh:
 				count++
 				if count >= 2 {
-					cmd.Process.Kill() //nolint:errcheck,gosec
+					syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) //nolint:errcheck,gosec
 					return
 				}
-				cmd.Process.Signal(sig) //nolint:errcheck,gosec
+				if s, ok := sig.(syscall.Signal); ok {
+					syscall.Kill(-cmd.Process.Pid, s) //nolint:errcheck,gosec
+				}
 			}
 		}
 	}()
@@ -231,6 +236,11 @@ func ensurePrivateDir(path string) error {
 	}
 	if stat.Uid != uint32(os.Getuid()) { //nolint:gosec
 		return fmt.Errorf("%s is owned by uid %d, not current user %d", path, stat.Uid, os.Getuid())
+	}
+	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+		if err := os.Chmod(path, 0o700); err != nil {
+			return fmt.Errorf("%s has perm %o and chmod failed: %w", path, perm, err)
+		}
 	}
 	return nil
 }

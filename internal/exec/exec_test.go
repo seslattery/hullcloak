@@ -259,6 +259,38 @@ func TestRunSubdirSymlinkGuard(t *testing.T) {
 	}
 }
 
+func TestRunFixesPermissions(t *testing.T) {
+	skipIfNoSandbox(t)
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	base := filepath.Join(dir, ".hullcloak-tmp")
+	os.MkdirAll(filepath.Join(base, "tmp"), 0o755)  //nolint:errcheck
+	os.MkdirAll(filepath.Join(base, "cache"), 0o755) //nolint:errcheck
+
+	_, err := Run(context.Background(), &Options{
+		Config:  testConfig(),
+		Command: []string{"/usr/bin/true"},
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	dir, _ = filepath.EvalSymlinks(dir)
+	for _, sub := range []string{"", "tmp", "cache"} {
+		d := filepath.Join(dir, ".hullcloak-tmp", sub)
+		info, err := os.Stat(d)
+		if err != nil {
+			t.Fatalf("stat %s: %v", d, err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o700 {
+			t.Errorf("%s perm = %o, want 700", d, perm)
+		}
+	}
+}
+
 func TestRunValidation(t *testing.T) {
 	tests := []struct {
 		name string
