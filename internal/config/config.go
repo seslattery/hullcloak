@@ -164,24 +164,22 @@ func validateHost(raw string) error {
 	if strings.Contains(raw, "://") {
 		return fmt.Errorf("must be a hostname, not a URL")
 	}
-	if strings.Contains(raw, ":") {
-		return fmt.Errorf("must be a hostname without port; use allow_ports for port control")
-	}
 
 	h := normalizeHost(raw)
-
 	wildcard := strings.HasPrefix(h, "*.")
 	actual := strings.TrimPrefix(h, "*.")
 
+	if net.ParseIP(actual) != nil {
+		return fmt.Errorf("IP literals are not supported; use hostnames")
+	}
+	if strings.Contains(raw, ":") {
+		return fmt.Errorf("must be a hostname without port; use allow_ports for port control")
+	}
 	if strings.Contains(h, "*") && !wildcard {
 		return fmt.Errorf("wildcard must be leftmost label (e.g., *.example.com)")
 	}
 	if strings.Count(h, "*") > 1 {
 		return fmt.Errorf("only one wildcard is allowed")
-	}
-
-	if net.ParseIP(actual) != nil {
-		return fmt.Errorf("IP literals are not supported; use hostnames")
 	}
 	if !isDomainName(actual) {
 		return fmt.Errorf("not a valid hostname")
@@ -222,6 +220,9 @@ func validatePaths(paths []string, field string) error {
 	for _, p := range paths {
 		if p == "" {
 			return fmt.Errorf("%s: empty path", field)
+		}
+		if strings.ContainsAny(p, "\x00\r\n") {
+			return fmt.Errorf("%s: path contains control characters: %q", field, p)
 		}
 		if p == "~" || strings.HasPrefix(p, "~/") {
 			continue

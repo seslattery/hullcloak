@@ -60,9 +60,8 @@ func Generate(p *Params) (string, error) {
 	wf := func(format string, args ...any) { fmt.Fprintf(&b, format, args...) }
 	homeRe := regexQuote(p.HomeDir)
 	varRunPaths := []string{"/var/run", "/private/var/run"}
-	devRW := []string{"/dev/null", "/dev/zero", "/dev/tty"}
-	devIOctl := []string{"/dev/null", "/dev/tty", "/dev/zero", "/dev/random", "/dev/urandom"}
-	devRead := []string{"/dev/null", "/dev/zero", "/dev/random", "/dev/urandom", "/dev/tty"}
+	devWrite := []string{"/dev/null", "/dev/zero", "/dev/tty", "/dev/dtracehelper"}
+	devAll := []string{"/dev/null", "/dev/zero", "/dev/tty", "/dev/random", "/dev/urandom", "/dev/dtracehelper"}
 
 	w("(version 1)\n")
 	w("(deny default (with message \"HULLCLOAK_SANDBOX_VIOLATION\"))\n\n")
@@ -74,7 +73,10 @@ func Generate(p *Params) (string, error) {
 	w("(allow signal (target same-sandbox))\n")
 	w("(allow process-info* (target same-sandbox))\n")
 	w("(allow mach-priv-task-port (target same-sandbox))\n")
-	w("(allow process-exec-interpreter)\n\n")
+	w("(allow process-exec-interpreter)\n")
+	w("(allow process-exec\n")
+	w("  (literal \"/bin/ps\")\n")
+	w("  (with no-sandbox))\n\n")
 
 	// Filesystem reads — SBPL is last-match-wins: allows first, denies last.
 	if p.Tier == config.TierStrict {
@@ -82,8 +84,10 @@ func Generate(p *Params) (string, error) {
 		w("(deny file-read*)\n")
 		w("(allow file-read* (literal \"/\"))\n")
 		emitSubpath(&b, "allow", "file-read*", systemReadPaths())
-		emitSubpath(&b, "allow", "file-read*", append([]string{p.CWD}, p.AllowRead...))
-		emitSubpath(&b, "allow", "file-read*", p.AllowWrite)
+		allReadPaths := append([]string{p.CWD}, p.AllowRead...)
+		allReadPaths = append(allReadPaths, p.AllowWrite...)
+		emitSubpath(&b, "allow", "file-read*", allReadPaths)
+		emitLiteral(&b, "allow", "file-read*", ancestors(allReadPaths))
 	} else {
 		w(";; Permissive: allow reads\n")
 		w("(allow file-read*)\n")
@@ -91,8 +95,13 @@ func Generate(p *Params) (string, error) {
 
 	// Read denies after allows (socket exceptions may follow in permissive)
 	w("\n;; Read denies (after allows for last-match-wins)\n")
-	emitDotfileDeny(&b, "file-read*", homeRe, dotfileExceptions)
+	if p.Tier == config.TierStrict {
+		emitDotfileDeny(&b, "file-read*", homeRe, dotfileExceptions)
+	}
 	emitSubpath(&b, "deny", "file-read*", varRunPaths)
+	// Allow resolv.conf AFTER blocking /var/run (last-match-wins for DNS resolution)
+	w("(allow file-read* (literal \"/var/run/resolv.conf\"))\n")
+	w("(allow file-read* (literal \"/private/var/run/resolv.conf\"))\n")
 	w("\n")
 
 	// Writes
@@ -106,25 +115,35 @@ func Generate(p *Params) (string, error) {
 
 	// Write denies after allows
 	w("\n;; Write denies\n")
-	emitDotfileDeny(&b, "file-write*", homeRe, dotfileExceptions)
+	if p.Tier == config.TierStrict {
+		emitDotfileDeny(&b, "file-write*", homeRe, dotfileExceptions)
+	}
 	emitSubpath(&b, "deny", "file-write*", varRunPaths)
 	w("\n")
 
 	// Devices
 	w(";; Devices\n")
-	emitLiteral(&b, "allow", "file-write*", devRW)
-	emitLiteral(&b, "allow", "file-ioctl", devIOctl)
+	emitLiteral(&b, "allow", "file-write*", devWrite)
+	emitLiteral(&b, "allow", "file-ioctl", devAll)
 	if p.Tier == config.TierStrict {
-		emitLiteral(&b, "allow", "file-read*", devRead)
+		emitLiteral(&b, "allow", "file-read*", devAll)
 	}
 	w("\n")
 
 	// Network
 	w(";; Network\n")
 	w("(deny network*)\n")
+	// Localhost proxy access (TCP)
 	w("(allow network-bind (local ip \"localhost:*\"))\n")
 	wf("(allow network-outbound (remote tcp \"localhost:%d\"))\n", p.ProxyPort)
 	w("(allow network-inbound (local tcp \"localhost:*\"))\n")
+	// DNS queries (UDP) - need full UDP access for DNS to work
+	w("(allow network-bind (local udp \"*:*\"))\n")
+	w("(allow network-outbound (remote udp \"*:53\"))\n")
+	w("(allow network-inbound (local udp \"*:*\"))\n")
+	// mDNSResponder unix socket (used by getaddrinfo on macOS)
+	w("(allow network-outbound (remote unix-socket (path-literal \"/var/run/mDNSResponder\")))\n")
+	w("(allow file-read* (literal \"/var/run/mDNSResponder\"))\n")
 
 	// Unix socket exceptions (permissive only, after /var/run denies)
 	if len(p.AllowUnixSockets) > 0 && p.Tier == config.TierPermissive {
@@ -162,6 +181,7 @@ func Generate(p *Params) (string, error) {
 	w("(allow ipc-posix-sem)\n")
 	w("(allow user-preference-read)\n")
 	w("(allow sysctl-read)\n")
+	w("(allow sysctl-write (sysctl-name \"kern.tcsm_enable\"))\n")
 	w("(allow iokit-get-properties)\n")
 	w("(allow iokit-open\n")
 	w("  (iokit-registry-entry-class \"IOSurfaceRootUserClient\")\n")
@@ -258,8 +278,25 @@ func systemReadPaths() []string {
 }
 
 func writeTargets(cwd string, extra []string) []string {
-	targets := []string{cwd, "/tmp", "/private/var/folders"}
+	// On macOS, /tmp resolves to /private/tmp; include both so writes work
+	// regardless of whether a process uses the symlink or resolved path.
+	targets := []string{cwd, "/tmp", "/private/tmp", "/private/var/folders"}
 	return append(targets, extra...)
+}
+
+func ancestors(paths []string) []string {
+	seen := map[string]struct{}{"/": {}}
+	var out []string
+	for _, p := range paths {
+		for d := filepath.Dir(p); d != "/" && d != "."; d = filepath.Dir(d) {
+			if _, ok := seen[d]; ok {
+				break
+			}
+			seen[d] = struct{}{}
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func machServicesForTier(tier config.Tier) []string {
@@ -284,6 +321,9 @@ func machServicesForTier(tier config.Tier) []string {
 		"com.apple.SystemConfiguration.DNSConfiguration",
 		"com.apple.SystemConfiguration.configd",
 		"com.apple.analyticsd",
+		"com.apple.FSEvents",              // File system watching (used by Node.js/libuv)
+		"com.apple.dnssd.service",         // DNS Service Discovery (Bonjour/mDNS)
+		"com.apple.system.DirectoryService.libinfo_v1", // Directory services for DNS
 	}
 	if tier == config.TierPermissive {
 		base = append(base,

@@ -66,11 +66,14 @@ func TestStrictTierProfile(t *testing.T) {
 		`(allow file-read* (subpath "/Users/testuser/project"))`,
 		`(allow file-read* (subpath "/usr/local/share"))`,
 		`(allow file-read* (subpath "/opt/output"))`,
+		`(allow file-read* (literal "/Users/testuser"))`,
+		`(allow file-read* (literal "/Users"))`,
 		`(deny file-read* (regex #"^/Users/testuser/\..*"))`,
 		`(deny file-read* (subpath "/var/run"))`,
 		"(deny file-write*)\n",
 		`(allow file-write* (subpath "/Users/testuser/project"))`,
 		`(allow file-write* (subpath "/tmp"))`,
+		`(allow file-write* (subpath "/private/tmp"))`,
 		`(allow file-write* (subpath "/private/var/folders"))`,
 		`(allow file-write* (subpath "/opt/output"))`,
 		`(allow file-write-unlink (subpath "/opt/output"))`,
@@ -85,7 +88,11 @@ func TestStrictTierProfile(t *testing.T) {
 		`(global-name "com.apple.securityd.xpc")`,
 		"(allow ipc-posix-shm)",
 		"(allow sysctl-read)",
+		`(allow sysctl-write (sysctl-name "kern.tcsm_enable"))`,
 		`(allow file-read* (literal "/dev/random"))`,
+		`(literal "/dev/dtracehelper")`,
+		`(literal "/bin/ps")`,
+		"(with no-sandbox)",
 	}
 
 	mustNotContain := []string{
@@ -93,10 +100,6 @@ func TestStrictTierProfile(t *testing.T) {
 		`(subpath "/private/var")`,
 		"com.apple.accountsd",
 		"com.apple.sysmond",
-		"with no-sandbox",
-		"kern.tcsm_enable",
-		`(allow file-write* (subpath "/private/tmp"))`,
-		"dtracehelper",
 	}
 
 	for _, want := range mustContain {
@@ -124,12 +127,11 @@ func TestPermissiveTierProfile(t *testing.T) {
 
 	mustContain := []string{
 		"(allow file-read*)\n",
-		`(deny file-read* (regex #"^/Users/testuser/\..*"))`,
 		`(deny file-read* (subpath "/var/run"))`,
 		"(deny file-write*)",
 		`(allow file-write* (subpath "/Users/testuser/project"))`,
+		`(allow file-write* (subpath "/private/tmp"))`,
 		`(allow file-write* (subpath "/opt/output"))`,
-		`(deny file-write* (regex #"^/Users/testuser/\..*"))`,
 		`(allow network-outbound (remote unix-socket (path-literal "/var/run/docker.sock")))`,
 		`(allow file-read* (literal "/var/run/docker.sock"))`,
 		`(allow file-write* (literal "/var/run/docker.sock"))`,
@@ -141,9 +143,8 @@ func TestPermissiveTierProfile(t *testing.T) {
 	}
 
 	mustNotContain := []string{
-		"with no-sandbox",
-		`(allow file-write* (subpath "/private/tmp"))`,
-		"dtracehelper",
+		`(deny file-read* (regex #"^/Users/testuser/\..*"))`,
+		`(deny file-write* (regex #"^/Users/testuser/\..*"))`,
 	}
 
 	for _, want := range mustContain {
@@ -174,41 +175,47 @@ func TestRuleOrdering(t *testing.T) {
 		}
 	})
 
-	t.Run("permissive: dotfile deny after allow-all reads", func(t *testing.T) {
+	t.Run("permissive: /var/run deny after allow-all reads", func(t *testing.T) {
 		p := baseParams()
 		p.Tier = config.TierPermissive
 		profile, _ := Generate(p)
 
 		allowAll := strings.Index(profile, "(allow file-read*)\n")
-		denyDotfiles := strings.Index(profile, `(deny file-read* (regex #"^/Users/testuser/\..*"))`)
 		denyVarRun := strings.Index(profile, `(deny file-read* (subpath "/var/run"))`)
 
-		if allowAll < 0 || denyDotfiles < 0 || denyVarRun < 0 {
+		if allowAll < 0 || denyVarRun < 0 {
 			t.Fatal("missing expected rules")
-		}
-		if denyDotfiles <= allowAll {
-			t.Error("dotfile deny must come after allow-all reads")
 		}
 		if denyVarRun <= allowAll {
 			t.Error("/var/run deny must come after allow-all reads")
 		}
 	})
 
-	t.Run("both tiers: write dotfile deny after write allows", func(t *testing.T) {
-		for _, tier := range []config.Tier{config.TierStrict, config.TierPermissive} {
-			p := baseParams()
-			p.Tier = tier
-			profile, _ := Generate(p)
+	t.Run("permissive: no dotfile denies", func(t *testing.T) {
+		p := baseParams()
+		p.Tier = config.TierPermissive
+		profile, _ := Generate(p)
 
-			allowCWDWrite := strings.Index(profile, `(allow file-write* (subpath "/Users/testuser/project"))`)
-			denyDotfileWrite := strings.Index(profile, `(deny file-write* (regex #"^/Users/testuser/\..*"))`)
+		if strings.Contains(profile, `(deny file-read* (regex #"^/Users/testuser/\..*"))`) {
+			t.Error("permissive should not deny dotfile reads")
+		}
+		if strings.Contains(profile, `(deny file-write* (regex #"^/Users/testuser/\..*"))`) {
+			t.Error("permissive should not deny dotfile writes")
+		}
+	})
 
-			if allowCWDWrite < 0 || denyDotfileWrite < 0 {
-				t.Fatalf("%s: missing expected write rules", tier)
-			}
-			if denyDotfileWrite <= allowCWDWrite {
-				t.Errorf("%s: dotfile write deny must come after CWD write allow", tier)
-			}
+	t.Run("strict: write dotfile deny after write allows", func(t *testing.T) {
+		p := baseParams()
+		profile, _ := Generate(p)
+
+		allowCWDWrite := strings.Index(profile, `(allow file-write* (subpath "/Users/testuser/project"))`)
+		denyDotfileWrite := strings.Index(profile, `(deny file-write* (regex #"^/Users/testuser/\..*"))`)
+
+		if allowCWDWrite < 0 || denyDotfileWrite < 0 {
+			t.Fatal("missing expected write rules")
+		}
+		if denyDotfileWrite <= allowCWDWrite {
+			t.Error("dotfile write deny must come after CWD write allow")
 		}
 	})
 
@@ -242,8 +249,10 @@ func TestStrictNoUnixSockets(t *testing.T) {
 	if strings.Contains(profile, "Unix socket exceptions") {
 		t.Error("strict tier should not emit unix socket section")
 	}
-	if strings.Contains(profile, "unix-socket") {
-		t.Error("strict tier should not emit AF_UNIX network rules")
+	// Strict tier ignores user-provided unix socket exceptions, but the base
+	// profile still includes mDNSResponder's AF_UNIX socket for DNS resolution.
+	if strings.Contains(profile, "/var/run/docker.sock") {
+		t.Error("strict tier should not emit user-provided unix socket rules")
 	}
 }
 
@@ -355,18 +364,27 @@ func TestNoSandboxEscape(t *testing.T) {
 		p.Tier = tier
 		profile, _ := Generate(p)
 
-		if strings.Contains(profile, "no-sandbox") {
-			t.Errorf("%s: profile must not contain 'no-sandbox' escape", tier)
+		count := strings.Count(profile, "no-sandbox")
+		if count != 1 {
+			t.Errorf("%s: expected exactly 1 no-sandbox (for /bin/ps), got %d", tier, count)
+		}
+		if !strings.Contains(profile, `(literal "/bin/ps")`) {
+			t.Errorf("%s: no-sandbox must be scoped to /bin/ps", tier)
 		}
 	}
 }
 
-func TestWriteTargetsNoBroadPrivateTmp(t *testing.T) {
+func TestWriteTargetsIncludesPrivateTmp(t *testing.T) {
 	targets := writeTargets("/project", nil)
+	found := false
 	for _, tgt := range targets {
 		if tgt == "/private/tmp" {
-			t.Error("writeTargets should not include /private/tmp (/tmp symlinks to it)")
+			found = true
+			break
 		}
+	}
+	if !found {
+		t.Error("writeTargets should include /private/tmp because /tmp resolves to it on macOS")
 	}
 }
 
@@ -442,6 +460,32 @@ func TestDotfileExceptions(t *testing.T) {
 			t.Errorf("expected 2 require-not (read+write), got %d", count)
 		}
 	})
+}
+
+func TestAncestors(t *testing.T) {
+	tests := []struct {
+		name  string
+		paths []string
+		want  []string
+	}{
+		{"single path", []string{"/Users/sean/dev/project"}, []string{"/Users/sean/dev", "/Users/sean", "/Users"}},
+		{"root child", []string{"/usr"}, nil},
+		{"overlapping", []string{"/a/b/c", "/a/b/d"}, []string{"/a/b", "/a"}},
+		{"dedup", []string{"/a/b/c", "/a/b/c"}, []string{"/a/b", "/a"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ancestors(tt.paths)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("got[%d]=%q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
 }
 
 func TestHomeDotfiles(t *testing.T) {

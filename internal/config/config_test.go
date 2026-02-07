@@ -106,6 +106,7 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		// hostname: IP literals
 		{"ipv4 literal", "version: 1\nallow: [1.2.3.4]", "IP literals"},
 		{"ipv4 private", "version: 1\nallow: [192.168.1.1]", "IP literals"},
+		{"ipv6 bare", "version: 1\nallow: [\"::1\"]", "IP literals"},
 		{"ipv6 bracketed", "version: 1\nallow: [\"[::1]\"]", "invalid characters"},
 		{"ipv6 with port", "version: 1\nallow: [\"[::1]:443\"]", "invalid characters"},
 		{"host with port", "version: 1\nallow: [\"api.example.com:443\"]", "without port"},
@@ -138,6 +139,7 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"unix sockets strict", "version: 1\ntier: strict\nallow: [api.example.com]\nallow_unix_sockets: [/var/run/docker.sock]", "permissive"},
 		{"unix socket relative", "version: 1\ntier: permissive\nallow: [api.example.com]\nallow_unix_sockets: [relative/sock]", "must be absolute"},
 		{"unix socket empty", "version: 1\ntier: permissive\nallow: [api.example.com]\nallow_unix_sockets: [\"\"]", "empty path"},
+		{"path with null", "version: 1\nallow: [api.example.com]\nallow_write: [\"/tmp/\\x00bad\"]", "control characters"},
 
 		// ports
 		{"port zero", "version: 1\nallow: [api.example.com]\nallow_ports: [0, 443]", "not a valid port"},

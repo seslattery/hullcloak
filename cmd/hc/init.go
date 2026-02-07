@@ -25,15 +25,19 @@ allow:
 # Override default allowed ports (default: [443, 80])
 # allow_ports: [443, 80, 8080]
 
-# Extra readable paths beyond system paths (strict tier only)
-# Must be absolute paths. Tilde (~) is expanded.
-# allow_read:
-#   - /usr/local/share
+# AI agent config directories (dotfiles are blocked by default in strict tier).
+# Add paths here so agents can read/write their own config and state.
+allow_read:
+  - ~/.claude
+  - ~/.claude.json
+  - ~/.amp
+  - ~/.codex
 
-# Extra writable paths beyond cwd (both tiers)
-# Must be absolute paths. Tilde (~) is expanded.
-# allow_write:
-#   - /tmp
+allow_write:
+  - ~/.claude
+  - ~/.claude.json
+  - ~/.amp
+  - ~/.codex
 
 # Unix sockets to allow (permissive tier only, denied in strict)
 # allow_unix_sockets:

@@ -42,20 +42,16 @@ func runWrap(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
+		cwd, err := hcexec.CanonicalCWD()
+		if err != nil {
+			return err
+		}
+		_, tmpDir, cacheDir := hcexec.WorkDirs(cwd)
 		out := cmd.OutOrStdout()
 		fmt.Fprintln(out, p)                                             //nolint:errcheck
 		fmt.Fprintf(out, "hc: would run: %s\n", strings.Join(args, " ")) //nolint:errcheck
-
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		cwd, err = filepath.EvalSymlinks(cwd)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "hc: TMPDIR=%s/.hullcloak-tmp/tmp/\n", cwd)          //nolint:errcheck
-		fmt.Fprintf(out, "hc: XDG_CACHE_HOME=%s/.hullcloak-tmp/cache\n", cwd) //nolint:errcheck
+		fmt.Fprintf(out, "hc: TMPDIR=%s\n", tmpDir+"/")                  //nolint:errcheck
+		fmt.Fprintf(out, "hc: XDG_CACHE_HOME=%s\n", cacheDir)            //nolint:errcheck
 		if len(cfg.EnvPassthrough) > 0 {
 			fmt.Fprintf(out, "hc: env_passthrough: %s\n", strings.Join(cfg.EnvPassthrough, ", ")) //nolint:errcheck
 		}
@@ -66,9 +62,9 @@ func runWrap(cmd *cobra.Command, args []string) error {
 		Config:  cfg,
 		Command: args,
 		Verbose: verbose,
-		Stdin:   cmd.InOrStdin(),
-		Stdout:  cmd.OutOrStdout(),
-		Stderr:  cmd.ErrOrStderr(),
+		Stdin:   os.Stdin,
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
 	})
 	if err != nil {
 		return err

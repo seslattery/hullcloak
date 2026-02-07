@@ -14,7 +14,7 @@ var rootCmd = &cobra.Command{
 	Version:          "0.1.0",
 	TraverseChildren: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
+		if len(args) == 0 && !printProfile {
 			return cmd.Help()
 		}
 		return runWrap(cmd, args)
