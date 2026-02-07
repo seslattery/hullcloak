@@ -302,14 +302,24 @@ func (l *blockLogger) Log(host string, port int, reason string) {
 
 func (l *blockLogger) maybeRotate() {
 	info, err := l.file.Stat()
-	if err != nil || info.Size() <= maxLogSize {
+	if err != nil {
+		log.Printf("proxy log stat: %v", err)
+		return
+	}
+	if info.Size() <= maxLogSize {
 		return
 	}
 	rotated := l.path + ".1"
 	l.file.Close()
 	os.Remove(rotated)
 	os.Rename(l.path, rotated)
-	l.file, _ = os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		log.Printf("proxy log reopen: %v", err)
+		l.file = nil
+		return
+	}
+	l.file = f
 }
 
 func (l *blockLogger) Close() error {
