@@ -80,12 +80,12 @@ func envCount(env []string, key string) int {
 
 func TestBuild(t *testing.T) {
 	tests := []struct {
-		name           string
-		parent         []string
-		opts           Options
-		wantPresent    map[string]string // key → exact value
-		wantAbsent     []string          // keys that must not appear
-		wantNoDupes    []string          // keys that must appear exactly once
+		name        string
+		parent      []string
+		opts        Options
+		wantPresent map[string]string // key → exact value
+		wantAbsent  []string          // keys that must not appear
+		wantNoDupes []string          // keys that must appear exactly once
 	}{
 		{
 			name: "strips secrets, sets proxy, sets tmp",
@@ -111,9 +111,9 @@ func TestBuild(t *testing.T) {
 			wantNoDupes: []string{"HTTP_PROXY", "NO_PROXY"},
 		},
 		{
-			name:   "passthrough preserves secret",
-			parent: []string{"ANTHROPIC_API_KEY=sk-ant", "OPENAI_API_KEY=sk-oa", "PATH=/usr/bin"},
-			opts:   Options{ProxyAddr: "http://127.0.0.1:9999", EnvPassthrough: []string{"ANTHROPIC_API_KEY"}},
+			name:        "passthrough preserves secret",
+			parent:      []string{"ANTHROPIC_API_KEY=sk-ant", "OPENAI_API_KEY=sk-oa", "PATH=/usr/bin"},
+			opts:        Options{ProxyAddr: "http://127.0.0.1:9999", EnvPassthrough: []string{"ANTHROPIC_API_KEY"}},
 			wantPresent: map[string]string{"ANTHROPIC_API_KEY": "sk-ant", "PATH": "/usr/bin"},
 			wantAbsent:  []string{"OPENAI_API_KEY"},
 		},
@@ -135,9 +135,9 @@ func TestBuild(t *testing.T) {
 			wantNoDupes: []string{"http_proxy", "no_proxy", "all_proxy"},
 		},
 		{
-			name:   "existing tmpdir overwritten",
-			parent: []string{"PATH=/usr/bin", "TMPDIR=/old/tmp", "XDG_CACHE_HOME=/old/cache"},
-			opts:   Options{ProxyAddr: "http://127.0.0.1:9999", TmpDir: "/new/tmp/", CacheDir: "/new/cache/"},
+			name:        "existing tmpdir overwritten",
+			parent:      []string{"PATH=/usr/bin", "TMPDIR=/old/tmp", "XDG_CACHE_HOME=/old/cache"},
+			opts:        Options{ProxyAddr: "http://127.0.0.1:9999", TmpDir: "/new/tmp/", CacheDir: "/new/cache/"},
 			wantPresent: map[string]string{"TMPDIR": "/new/tmp/", "XDG_CACHE_HOME": "/new/cache/"},
 			wantNoDupes: []string{"TMPDIR", "XDG_CACHE_HOME"},
 		},

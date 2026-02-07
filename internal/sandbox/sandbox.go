@@ -9,6 +9,7 @@ import (
 	"github.com/seslattery/hullcloak/internal/config"
 )
 
+// Params holds inputs for sandbox profile generation.
 type Params struct {
 	Tier             config.Tier
 	CWD              string
@@ -19,7 +20,8 @@ type Params struct {
 	AllowUnixSockets []string
 }
 
-func Generate(p Params) (string, error) {
+// Generate produces an SBPL sandbox profile from the given params.
+func Generate(p *Params) (string, error) {
 	if p.CWD == "" {
 		return "", fmt.Errorf("CWD is required")
 	}

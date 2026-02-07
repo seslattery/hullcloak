@@ -62,7 +62,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	configDir := filepath.Join(home, ".hullcloak")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil { //nolint:gosec // user-readable config dir
 		return fmt.Errorf("failed to create %s: %w", configDir, err)
 	}
 
@@ -72,7 +72,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if err := os.WriteFile(configPath, []byte(defaultConfig), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte(defaultConfig), 0o644); err != nil { //nolint:gosec // user-readable config file
 		return fmt.Errorf("failed to write %s: %w", configPath, err)
 	}
 

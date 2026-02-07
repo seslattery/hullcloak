@@ -23,6 +23,7 @@ var rootCmd = &cobra.Command{
 	SilenceUsage:  true,
 }
 
+// Execute runs the root command.
 func Execute() {
 	args := os.Args[1:]
 	if shouldRewriteArgs(args) {

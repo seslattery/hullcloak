@@ -21,6 +21,7 @@ var sensitiveVars = map[string]bool{
 	"MYSQL_PWD":          true,
 }
 
+// IsSecret reports whether key looks like a secret environment variable.
 func IsSecret(key string) bool {
 	upper := strings.ToUpper(key)
 	if sensitiveVars[upper] {
@@ -34,6 +35,7 @@ func IsSecret(key string) bool {
 	return false
 }
 
+// Options configures the sandboxed environment.
 type Options struct {
 	ProxyAddr      string
 	TmpDir         string
@@ -41,6 +43,7 @@ type Options struct {
 	EnvPassthrough []string
 }
 
+// Build constructs a filtered environment for the sandboxed process.
 func Build(parent []string, opts Options) []string {
 	passthrough := make(map[string]bool, len(opts.EnvPassthrough))
 	for _, k := range opts.EnvPassthrough {
@@ -90,7 +93,8 @@ func Build(parent []string, opts Options) []string {
 	return env
 }
 
-func Stripped(parent []string, passthrough []string) []string {
+// Stripped returns the names of secret variables that would be removed.
+func Stripped(parent, passthrough []string) []string {
 	pt := make(map[string]bool, len(passthrough))
 	for _, k := range passthrough {
 		pt[strings.ToUpper(k)] = true

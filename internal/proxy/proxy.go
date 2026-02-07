@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/elazarl/goproxy"
+
 	"github.com/seslattery/hullcloak/internal/config"
 )
 
+// Options configures the proxy server.
 type Options struct {
 	Allow      []string
 	AllowPorts []int
@@ -24,10 +26,12 @@ type Options struct {
 	Resolver   Resolver
 }
 
+// Resolver resolves hostnames to IP addresses.
 type Resolver interface {
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
+// Server is an HTTP proxy that enforces host and port allow-lists.
 type Server struct {
 	Addr     string
 	opts     Options
@@ -39,7 +43,8 @@ type Server struct {
 	logger   *blockLogger
 }
 
-func New(opts Options) (*Server, error) {
+// New creates a new proxy Server with the given options.
+func New(opts Options) (*Server, error) { //nolint:gocritic // opts is intentionally passed by value
 	if opts.Resolver == nil {
 		opts.Resolver = net.DefaultResolver
 	}
@@ -92,7 +97,7 @@ func (s *Server) guardedDial(ctx context.Context, network, addr string) (net.Con
 	}
 	ips, err := s.resolvePublicIPs(ctx, host)
 	if err != nil {
-		s.logger.Log(host, 0, err.Error())
+		s.logger.log(host, 0, err.Error())
 		return nil, err
 	}
 	var lastErr error
@@ -106,6 +111,7 @@ func (s *Server) guardedDial(ctx context.Context, network, addr string) (net.Con
 	return nil, lastErr
 }
 
+// Start begins listening and serving proxy requests.
 func (s *Server) Start() error {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -113,28 +119,32 @@ func (s *Server) Start() error {
 	}
 	s.listener = ln
 	s.Addr = ln.Addr().String()
-	s.server = &http.Server{Handler: s.proxy}
-	go s.server.Serve(ln)
+	s.server = &http.Server{
+		Handler:           s.proxy,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() { _ = s.server.Serve(ln) }() //nolint:errcheck // best-effort; server shutdown handled by Close
 	return nil
 }
 
+// Close shuts down the proxy server and its logger.
 func (s *Server) Close() error {
 	if s.server != nil {
 		if err := s.server.Close(); err != nil {
 			return err
 		}
 	}
-	return s.logger.Close()
+	return s.logger.close()
 }
 
-func (s *Server) handleConnect(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+func (s *Server) handleConnect(host string, ctx *goproxy.ProxyCtx) (action *goproxy.ConnectAction, newHost string) {
 	h, port, err := parseHostPort(host)
 	if err != nil {
-		s.logger.Log(host, 0, err.Error())
+		s.logger.log(host, 0, err.Error())
 		return goproxy.RejectConnect, host
 	}
 	if reason, ok := s.check(h, port); !ok {
-		s.logger.Log(h, port, reason)
+		s.logger.log(h, port, reason)
 		return goproxy.RejectConnect, host
 	}
 	return goproxy.OkConnect, host
@@ -155,7 +165,7 @@ func (s *Server) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (*http.
 }
 
 func (s *Server) reject(req *http.Request, host string, port int, reason string) (*http.Request, *http.Response) {
-	s.logger.Log(host, port, reason)
+	s.logger.log(host, port, reason)
 	return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusForbidden,
 		"blocked: "+reason)
 }
@@ -219,19 +229,19 @@ func isPublicIP(ip net.IP) bool {
 	return false
 }
 
-func parseHostPort(hostport string) (string, int, error) {
+func parseHostPort(hostport string) (host string, port int, err error) {
 	h, portStr, err := net.SplitHostPort(hostport)
 	if err != nil {
 		return "", 0, fmt.Errorf("invalid host:port %q", hostport)
 	}
-	port, err := strconv.Atoi(portStr)
+	port, err = strconv.Atoi(portStr)
 	if err != nil || port < 1 || port > 65535 {
 		return "", 0, fmt.Errorf("invalid port in %q", hostport)
 	}
 	return h, port, nil
 }
 
-func reqHostPort(req *http.Request) (string, int, error) {
+func reqHostPort(req *http.Request) (host string, port int, err error) {
 	h := req.URL.Hostname()
 	p := req.URL.Port()
 	if h == "" {
@@ -247,7 +257,7 @@ func reqHostPort(req *http.Request) (string, int, error) {
 			p = "80"
 		}
 	}
-	port, err := strconv.Atoi(p)
+	port, err = strconv.Atoi(p)
 	if err != nil || port < 1 || port > 65535 {
 		return "", 0, fmt.Errorf("invalid port %q", p)
 	}
@@ -278,24 +288,24 @@ func newBlockLogger(dir string) (*blockLogger, error) {
 	rotated := path + ".1"
 
 	if info, err := os.Stat(path); err == nil && info.Size() > maxLogSize {
-		os.Remove(rotated)
-		os.Rename(path, rotated)
+		os.Remove(rotated)       //nolint:errcheck,gosec // best-effort cleanup
+		os.Rename(path, rotated) //nolint:errcheck,gosec // best-effort rotation
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // path is constructed internally
 	if err != nil {
 		return nil, err
 	}
 	return &blockLogger{file: f, path: path}, nil
 }
 
-func (l *blockLogger) Log(host string, port int, reason string) {
+func (l *blockLogger) log(host string, port int, reason string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.file == nil {
 		return
 	}
-	fmt.Fprintf(l.file, "%s\t%s\t%d\t%s\n",
+	fmt.Fprintf(l.file, "%s\t%s\t%d\t%s\n", //nolint:errcheck // best-effort log write
 		time.Now().Format(time.RFC3339), host, port, reason)
 	l.maybeRotate()
 }
@@ -310,10 +320,10 @@ func (l *blockLogger) maybeRotate() {
 		return
 	}
 	rotated := l.path + ".1"
-	l.file.Close()
-	os.Remove(rotated)
-	os.Rename(l.path, rotated)
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	l.file.Close()                                                            //nolint:errcheck,gosec // best-effort; reopening immediately
+	os.Remove(rotated)                                                        //nolint:errcheck,gosec // best-effort cleanup
+	os.Rename(l.path, rotated)                                                //nolint:errcheck,gosec // best-effort rotation
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // path is constructed internally
 	if err != nil {
 		log.Printf("proxy log reopen: %v", err)
 		l.file = nil
@@ -322,7 +332,7 @@ func (l *blockLogger) maybeRotate() {
 	l.file = f
 }
 
-func (l *blockLogger) Close() error {
+func (l *blockLogger) close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.file == nil {

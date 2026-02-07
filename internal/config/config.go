@@ -10,15 +10,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// CurrentVersion is the latest config schema version.
 const CurrentVersion = 1
 
+// Tier controls the sandbox strictness level.
 type Tier string
 
 const (
-	TierStrict     Tier = "strict"
+	// TierStrict enables restrictive sandbox defaults.
+	TierStrict Tier = "strict"
+	// TierPermissive enables compatibility-oriented sandbox defaults.
 	TierPermissive Tier = "permissive"
 )
 
+// Config holds the parsed hullcloak configuration.
 type Config struct {
 	Version          int      `yaml:"version"`
 	Tier             Tier     `yaml:"tier"`
@@ -32,12 +37,13 @@ type Config struct {
 
 var defaultAllowPorts = []int{443, 80}
 
+// Load reads and validates config from the given path.
 func Load(path string) (*Config, error) {
 	expanded, err := expandTilde(path)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(expanded)
+	data, err := os.ReadFile(expanded) //nolint:gosec // config path is user-provided by design
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
@@ -58,6 +64,7 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// LoadDefault returns a Config with default values.
 func LoadDefault() *Config {
 	return &Config{
 		Version:    CurrentVersion,
@@ -190,7 +197,7 @@ func validateHost(raw string) error {
 }
 
 func isDomainName(s string) bool {
-	if len(s) == 0 || len(s) > 253 {
+	if s == "" || len(s) > 253 {
 		return false
 	}
 	for _, label := range strings.Split(s, ".") {
@@ -227,7 +234,7 @@ func validatePaths(paths []string, field string) error {
 }
 
 func isEnvName(s string) bool {
-	if len(s) == 0 {
+	if s == "" {
 		return false
 	}
 	for i, c := range s {
@@ -280,6 +287,7 @@ func dedup(items []string) []string {
 	return out
 }
 
+// MatchHost reports whether host matches the given pattern.
 func MatchHost(pattern, host string) bool {
 	pattern = normalizeHost(pattern)
 	host = normalizeHost(host)
@@ -293,5 +301,5 @@ func MatchHost(pattern, host string) bool {
 		return false
 	}
 	prefix := host[:len(host)-len(suffix)]
-	return len(prefix) > 0 && !strings.Contains(prefix, ".")
+	return prefix != "" && !strings.Contains(prefix, ".")
 }

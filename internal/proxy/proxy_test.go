@@ -130,11 +130,11 @@ func TestResolvePublicIPs(t *testing.T) {
 	defer s.Close()
 
 	tests := []struct {
-		name    string
-		host    string
-		wantOK  bool
-		wantN   int
-		substr  string
+		name   string
+		host   string
+		wantOK bool
+		wantN  int
+		substr string
 	}{
 		{"public IP", "public.example.com", true, 1, ""},
 		{"multiple public IPs", "multi.example.com", true, 2, ""},
@@ -265,9 +265,9 @@ func TestBlockLogger(t *testing.T) {
 	t.Run("writes entries", func(t *testing.T) {
 		dir := t.TempDir()
 		bl, _ := newBlockLogger(dir)
-		bl.Log("evil.com", 443, "host not allowed")
-		bl.Log("bad.com", 80, "DNS rebinding")
-		bl.Close()
+		bl.log("evil.com", 443, "host not allowed")
+		bl.log("bad.com", 80, "DNS rebinding")
+		bl.close()
 
 		content := string(must(os.ReadFile(filepath.Join(dir, "proxy.log"))))
 		for _, want := range []string{"evil.com\t443\thost not allowed", "bad.com\t80\tDNS rebinding"} {
@@ -283,8 +283,8 @@ func TestBlockLogger(t *testing.T) {
 		os.WriteFile(path, make([]byte, maxLogSize+1), 0o600)
 
 		bl, _ := newBlockLogger(dir)
-		bl.Log("test.com", 443, "test")
-		bl.Close()
+		bl.log("test.com", 443, "test")
+		bl.close()
 
 		if info, err := os.Stat(path + ".1"); err != nil || info.Size() < maxLogSize {
 			t.Error("proxy.log.1 should exist with old data")
@@ -302,9 +302,9 @@ func TestBlockLogger(t *testing.T) {
 		// Write enough to exceed maxLogSize
 		big := strings.Repeat("x", 1024)
 		for i := 0; i < (maxLogSize/1024)+10; i++ {
-			bl.Log("host.com", 443, big)
+			bl.log("host.com", 443, big)
 		}
-		bl.Close()
+		bl.close()
 
 		if _, err := os.Stat(path + ".1"); err != nil {
 			t.Error("proxy.log.1 should exist after runtime rotation")
@@ -316,9 +316,9 @@ func TestBlockLogger(t *testing.T) {
 
 	t.Run("close is race-safe", func(t *testing.T) {
 		bl, _ := newBlockLogger(t.TempDir())
-		bl.Close()
-		bl.Log("after.close.com", 443, "should not panic")
-		if err := bl.Close(); err != nil {
+		bl.close()
+		bl.log("after.close.com", 443, "should not panic")
+		if err := bl.close(); err != nil {
 			t.Errorf("double Close() = %v", err)
 		}
 	})
@@ -398,7 +398,11 @@ func TestProxyHTTP(t *testing.T) {
 	client := proxyClient(s.Addr)
 
 	t.Run("allowed host forwards", func(t *testing.T) {
-		resp, err := client.Get(fmt.Sprintf("http://allowed.example.com:%d/ok", port))
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("http://allowed.example.com:%d/ok", port), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -413,7 +417,11 @@ func TestProxyHTTP(t *testing.T) {
 	})
 
 	t.Run("blocked host returns 403", func(t *testing.T) {
-		resp, err := client.Get(fmt.Sprintf("http://blocked.example.com:%d/ok", port))
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("http://blocked.example.com:%d/ok", port), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -424,7 +432,11 @@ func TestProxyHTTP(t *testing.T) {
 	})
 
 	t.Run("blocked port returns 403", func(t *testing.T) {
-		resp, err := client.Get("http://allowed.example.com:9999/ok")
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://allowed.example.com:9999/ok", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}

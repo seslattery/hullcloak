@@ -8,8 +8,8 @@ import (
 	"github.com/seslattery/hullcloak/internal/config"
 )
 
-func baseParams() Params {
-	return Params{
+func baseParams() *Params {
+	return &Params{
 		Tier:      config.TierStrict,
 		CWD:       "/Users/testuser/project",
 		HomeDir:   "/Users/testuser",
@@ -34,7 +34,7 @@ func TestGenerateValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := baseParams()
-			tt.modify(&p)
+			tt.modify(p)
 			_, err := Generate(p)
 			if err == nil || !strings.Contains(err.Error(), tt.substr) {
 				t.Errorf("got err=%v, want containing %q", err, tt.substr)
